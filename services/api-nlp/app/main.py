@@ -11,11 +11,11 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
 from loguru import logger
-from transformers import pipeline
 
 from app import inference
 from app.schemas import HealthOut, InfoOut, ReviewIn, SentimentOut
@@ -27,6 +27,17 @@ from app.schemas import HealthOut, InfoOut, ReviewIn, SentimentOut
 # Pour debugger un cas complexe, repasse à diagnose=True ponctuellement.
 logger.remove()
 logger.add(sys.stderr, level="INFO", backtrace=False, diagnose=False)
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+logger.add(
+    "logs/api.log",
+    rotation="5 MB",
+    retention="7 days",
+    compression="zip",
+    level="INFO",
+    enqueue=True,
+)
 
 
 # --- Filtre access log uvicorn : on n'affiche pas les pings healthcheck ---
@@ -138,8 +149,7 @@ def predict(payload: ReviewIn) -> SentimentOut:
             detail=f"Texte trop long (> {MAX_TEXT_LENGTH} caractères).",
         )
 
-    # TODO Tâche 3 — Appeler inference.predict_sentiment() et logger la requête.
-    # Pour l'instant, on signale que ce n'est pas implémenté.
+    logger.info("predict: requête reçue ({} caractères)", len(payload.texte))
 
     result = inference.predict_sentiment(
         pipeline=state["pipeline"],
@@ -147,4 +157,9 @@ def predict(payload: ReviewIn) -> SentimentOut:
         model_name=MODEL_NAME,
     )
 
+    logger.info(
+        "predict: sentiment={} latence={:.1f}ms",
+        result.sentiment,
+        result.latence_ms,
+    )
     return result
