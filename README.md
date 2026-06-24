@@ -1,193 +1,353 @@
-# M0-B2 — Squelette repo (sentiment FR · stack `docker compose`)
+# FastIA — Analyse de sentiment FR · Aubergine Hôtels
 
-> **Repo template GitHub.** Clique sur **« Use this template »** en haut à
-> droite de cette page → **Create a new repository** → nomme-le
-> `M0-B2-sentiment-<prénom>` sur **ton** compte GitHub personnel.
-> C'est ce nouveau repo que vous clonerez pour travailler.
+Service NLP embarqué qui lit les reviews clients en français et les classe automatiquement en **négatif / neutre / positif** — sans cloud, sans clé API, entièrement conteneurisé.
 
-Brief **M0-B2 « Déployer une IA NLP packagée — sentiment FR chez Aubergine
-Hôtels »** — mercredi semaine 2.
-**Sync** : binôme tiré au sort, 4 h (3h45 + 15 min tour de table).
-**Async** : individuel, 4 h (fork du repo binôme).
-L'énoncé complet est publié sur **Simplonline**.
+Projet réalisé dans le cadre du brief **M0-B2** (Formation Dev-ID, juin 2026) — Nawelle Polin.
 
 ---
 
-## 🚀 Démarrage (3 commandes)
+## Sommaire
+
+- [Description](#description)
+- [Architecture](#architecture)
+- [Prérequis](#prérequis)
+- [Installation](#installation)
+- [Utilisation](#utilisation)
+- [Tests](#tests)
+- [Roadmap](#roadmap)
+- [Retours d'expérience](#retours-dexpérience)
+- [Licence](#licence)
+- [Contact](#contact)
+
+---
+
+## Description
+
+Aubergine Hôtels reçoit des centaines de reviews clients chaque semaine. L'objectif est d'automatiser leur qualification sans dépendre d'un service externe.
+
+Ce projet expose deux services Docker :
+
+- **`api-nlp`** — une API FastAPI qui reçoit un texte FR, l'analyse avec un modèle CamemBERT et renvoie un sentiment métier en JSON.
+- **`ui-streamlit`** — une interface web qui permet à n'importe quel collaborateur de coller une review et d'obtenir le résultat immédiatement.
+
+Le modèle [`cmarkea/distilcamembert-base-sentiment`](https://huggingface.co/cmarkea/distilcamembert-base-sentiment) produit nativement 5 classes (étoiles). Un **mapping métier 5★ → 3 classes** est appliqué côté API pour coller au besoin d'Aubergine Hôtels.
+
+---
+
+## Architecture
+
+```mermaid
+graph TD
+    User([Utilisateur]) -->|saisit une review| UI
+
+    subgraph s1["ui-streamlit — port 8501"]
+        UI["app.py Streamlit"]
+    end
+
+    subgraph s2["api-nlp — port 8000"]
+        API["main.py FastAPI"]
+        INF["inference.py"]
+        MODEL["Pipeline HuggingFace — DistilCamemBERT 270 Mo"]
+        MAP["Mapping 5 etoiles vers 3 classes"]
+    end
+
+    UI -->|"POST /predict — http://api-nlp:8000"| API
+    API -->|texte valide Pydantic| INF
+    INF -->|text-classification| MODEL
+    MODEL -->|scores 5 etoiles| MAP
+    MAP -->|classe metier| INF
+    INF -->|SentimentOut JSON| API
+    API -->|reponse JSON| UI
+    UI -->|sentiment colore et barres de scores| User
+
+    VOL_M[(models/)] -.->|cache HF| MODEL
+    VOL_L[(logs/)] -.->|Loguru api.log| API
+```
+
+Les deux conteneurs partagent le réseau bridge `m0b2-net` — l'UI appelle l'API via le nom de service `api-nlp`, jamais via `localhost`.
+
+---
+
+## Prérequis
+
+| Outil | Version min | Vérification |
+|---|---|---|
+| Docker | 24.x | `docker --version` |
+| Docker Compose | 2.x (plugin V2) | `docker compose version` |
+| RAM disponible | ≥ 2 Go | Pour charger le modèle CamemBERT |
+| Connexion internet | — | Uniquement au 1er démarrage (download ~270 Mo) |
+
+Pas de Python local requis — tout tourne dans les conteneurs.
+
+---
+
+## Installation
 
 ```bash
-# 0. Clone ton repo perso fraîchement créé
-git clone git@github.com:<ton-user>/M0-B2-sentiment-<prenom>.git
-cd M0-B2-sentiment-<prenom>
+# 1. Cloner le dépôt
+git clone https://github.com/nawellepolin/M0-B2-sentiment-nawelle.git
+cd M0-B2-sentiment-nawelle
 
-# 1. Configurer l'environnement
+# 2. Créer le fichier d'environnement
 cp .env.example .env
+# Éditer .env si besoin (MODEL_NAME_HF, MAX_TEXT_LENGTH)
 
-# 2. Construire et lancer la stack
+# 3. Lancer la stack
 docker compose up --build
-
-# 3. Vérifier
-curl http://localhost:8000/health        # API NLP
-open  http://localhost:8501              # UI Streamlit
 ```
 
-À l'arrêt : `Ctrl+C` puis `docker compose down` (les volumes `models/` et
-`logs/` sont conservés — le modèle HF n'est pas re-téléchargé au prochain `up`).
+> Le **premier démarrage** prend 5 à 8 minutes : build des images + téléchargement du modèle (~270 Mo).
+> Les démarrages suivants sont inférieurs à 30 secondes grâce au volume `models/`.
 
-> ⏱️ Le **1ᵉʳ démarrage** prend 3-5 min de build + 1-3 min de download du
-> modèle DistilCamemBERT (~270 Mo). Les démarrages suivants sont < 30 s grâce
-> au cache volume `models/`.
-
----
-
-## 🧠 Modèle utilisé
-
-**`cmarkea/distilcamembert-base-sentiment`** — DistilCamemBERT FR, 68 M
-paramètres, ~270 Mo.
-
-⚠️ Le modèle sort **5 étoiles** (`'1 star'` … `'5 stars'`). Le métier
-(Aubergine Hôtels) veut **3 classes** (`négatif/neutre/positif`).
-
-→ Tu dois implémenter le **mapping 5★ → 3 classes** dans
-`services/api-nlp/app/inference.py`. **C'est le geste cœur de ce brief**
-(adaptation d'un service au format métier — C6 N2).
-
----
-
-## 📁 Structure du repo
-
-```
-M0-B2-sentiment-<prenom>/
-├── docker-compose.yml             ← 2 services + healthcheck api-nlp
-├── .env.example
-├── services/
-│   ├── api-nlp/                   ← FastAPI + transformers
-│   │   ├── Dockerfile
-│   │   ├── requirements.txt
-│   │   ├── app/
-│   │   │   ├── main.py            ← routes (lifespan + /health + /info + /predict)
-│   │   │   ├── schemas.py         ← Pydantic ReviewIn / SentimentOut
-│   │   │   └── inference.py       ← TON CODE + mapping 5→3
-│   │   └── tests/
-│   │       └── test_health.py     ← 1 test pytest qui passe
-│   └── ui-streamlit/              ← UI utilisateur
-│       ├── Dockerfile
-│       ├── requirements.txt
-│       └── app.py                 ← UI à compléter (brancher l'appel HTTP)
-├── data/
-│   └── sample_reviews.csv         ← 30 reviews FR fictives (Aubergine Hôtels)
-├── postman/
-│   └── M0-B2_collection.json      ← à compléter (≥ 5 requêtes)
-├── ressources/                    ← 📚 mini-cours d'appui (lecture juste-à-temps)
-│   ├── 01_DockerCompose_essentiel.md
-│   ├── 02_HuggingFace_Transformers_essentiel.md
-│   ├── 03_Streamlit_essentiel.md
-│   ├── 04_API_Integration_essentiel.md
-│   ├── liens_officiels.md
-│   └── README.md
-├── .gitignore
-└── README.md (ce fichier — à compléter avec ta doc + schéma Mermaid)
-```
-
----
-
-## ✏️ Endpoints fournis
-
-| Endpoint | Statut au clone | Ce que tu dois faire |
-|---|---|---|
-| `GET /health` | ✅ fonctionnel | rien |
-| `GET /info` | ✅ fonctionnel | rien |
-| `POST /predict` | ❌ 501 Not Implemented | implémenter (avec mapping 5→3) |
-
-L'UI Streamlit est lancée mais affiche **« API non branchée »** tant que tu
-n'as pas branché l'appel HTTP dans `services/ui-streamlit/app.py`.
-
----
-
-## 🧭 Démarche attendue
-
-### Sync — mercredi 9h-13h (binôme)
-
-| # | Étape | Mini-cours | Durée |
-|---|---|---|---|
-| 1 | Tirage binômes + démarrage stack | (ce README) | 30 min |
-| 2 | Analyse du squelette + model card HF | — | 30 min |
-| 3 | Implémenter `/predict` + **mapping 5★ → 3 classes** | [`02_HuggingFace_Transformers`](./ressources/02_HuggingFace_Transformers_essentiel.md) | 1 h 15 |
-| 🍴 | **Switch des rôles binôme** (API ↔ UI) | — | 10 min |
-| 4 | Brancher l'UI Streamlit à l'API | [`03_Streamlit`](./ressources/03_Streamlit_essentiel.md) + [`04_API_Integration`](./ressources/04_API_Integration_essentiel.md) | 50 min |
-| 5 | Logging Loguru | mini-cours M0-B1 réutilisé | 30 min |
-| 6 | Tests pytest `/predict` | mini-cours M0-B1 réutilisé | 35 min |
-| 7 | **Tour de table** d'avancement + critères modèle | plénière | 15 min |
-
-### Async — jeudi/vendredi (individuel, fork du repo binôme)
-
-| # | Étape | Priorité | Durée |
-|---|---|---|---|
-| A | README perso + **schéma Mermaid** d'architecture | 🔴 critique | 1 h |
-| B | **Analyse de ≥ 3 reviews mal classées** + hypothèse explicative | 🔴 critique | 1 h |
-| C | Compléter la collection Postman (≥ 5 requêtes, cas limites) | 🟠 important | 45 min |
-| D | Justification du seuil de mapping retenu (½ page) | 🟠 important | 15 min |
-| E | **Bonus** : healthcheck custom avec retry | 🟢 libre | 30 min |
-| F | **Bonus** : endpoint `/predict/batch` | 🟢 libre | 30 min |
-| G | **Bonus** : pourquoi CamemBERT plutôt qu'un LLM (½ page) | 🟢 libre | 30 min |
-
-Cf. [`./ressources/README.md`](./ressources/README.md) pour le détail.
-
----
-
-## 🎯 Ce qui compte vraiment
-
-1. **Une stack qui tourne** avec healthcheck `healthy`. `docker compose up
-   --build` démarre sans erreur.
-2. **Le mapping 5★ → 3 classes implémenté et justifié** (le geste C6 N2).
-3. **L'UI Streamlit branchée à l'API** via le réseau docker interne
-   (nom de service `http://api-nlp:8000`, **pas** `localhost`).
-4. **≥ 3 tests pytest qui passent** depuis le conteneur.
-5. **Un README perso avec schéma Mermaid** lisible.
-6. **L'analyse des reviews mal classées** : ≥ 3 cas avec hypothèse typée
-   (ironie / négation / comparatif / mixte / ambivalence).
-
----
-
-## 🤝 Modalité binôme sync — règles du jeu
-
-- **Tirage au sort** par la formatrice mercredi 9h. Pas de libre choix.
-- **Une seule branche commune** (`main`).
-- **Commits identifiés** : `Co-authored-by:` quand vous codez ensemble.
-- **Switch obligatoire à mi-séance** (~10h45) : API ↔ UI, brief mutuel de
-  10 min avant.
-- **Personne ne termine le sync sans avoir touché aux deux côtés.**
-
-En async : **fork/clone** du repo binôme dans `M0-B2-sentiment-<prenom>`, tu
-travailles **seul·e**. Livrable critique = README perso + analyse reviews.
-
----
-
-## ✅ Tests & environnement
+Pour vérifier que tout est en ordre :
 
 ```bash
-docker compose exec api-nlp pytest -v      # tests dans le conteneur API
-docker compose ps                          # api-nlp doit être (healthy)
+docker compose ps
+# api-nlp doit afficher (healthy)
 ```
 
-| Variable (`.env`) | Défaut | Usage |
-|---|---|---|
-| `MODEL_NAME_HF` | `cmarkea/distilcamembert-base-sentiment` | Modèle HF à charger |
-| `MAX_TEXT_LENGTH` | `2000` | Validation Pydantic (longueur max texte) |
+Arrêt propre :
+
+```bash
+# Ctrl+C puis :
+docker compose down
+# Les volumes models/ et logs/ sont conservés
+```
 
 ---
 
-## 🆘 Bloqué·e ?
+## Utilisation
 
-| Symptôme | À tenter |
+### Interface web
+
+Ouvrir [http://localhost:8501](http://localhost:8501) — coller une review FR, cliquer sur **Analyser**.
+
+Le résultat affiche :
+- le sentiment détecté en couleur (rouge / orange / vert)
+- les probabilités brutes 5 étoiles sous forme de graphique à barres
+- la latence d'inférence et le nom du modèle
+
+### API REST
+
+Documentation interactive disponible sur [http://localhost:8000/docs](http://localhost:8000/docs).
+
+#### `GET /health`
+
+```bash
+curl http://localhost:8000/health
+```
+
+```json
+{ "status": "ok", "model_loaded": true }
+```
+
+#### `GET /info`
+
+```bash
+curl http://localhost:8000/info
+```
+
+```json
+{
+  "service": "FastIA Aubergine — sentiment FR",
+  "model_name": "cmarkea/distilcamembert-base-sentiment",
+  "native_classes": ["1 star", "2 stars", "3 stars", "4 stars", "5 stars"],
+  "target_classes": ["négatif", "neutre", "positif"],
+  "max_text_length": 2000
+}
+```
+
+#### `POST /predict`
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"texte": "Chambre propre, personnel très accueillant, on reviendra !"}'
+```
+
+```json
+{
+  "sentiment": "positif",
+  "scores_5_stars": {
+    "1 star": 0.012,
+    "2 stars": 0.018,
+    "3 stars": 0.054,
+    "4 stars": 0.201,
+    "5 stars": 0.715
+  },
+  "model_name": "cmarkea/distilcamembert-base-sentiment",
+  "latence_ms": 142.3
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `texte` | `string` | Review FR, 1 à 2000 caractères |
+
+| Champ réponse | Type | Description |
+|---|---|---|
+| `sentiment` | `"négatif"` \| `"neutre"` \| `"positif"` | Classe métier |
+| `scores_5_stars` | `dict[str, float]` | Probabilités brutes du modèle (somme ≈ 1) |
+| `latence_ms` | `float` | Temps d'inférence en millisecondes |
+
+### Mapping 5★ → 3 classes
+
+Le modèle produit une probabilité par étoile. Le mapping retenu est une moyenne pondérée par groupe :
+
+| Classe métier | Formule |
 |---|---|
-| `docker compose up` bloqué sur `pulling/building` | 1ᵉʳ build = 3-5 min + 1-3 min download modèle, patiente |
-| `/predict` renvoie toujours 501 | `inference.py` pas encore complété — normal |
-| `/predict` renvoie `"1 star"` au lieu de `"négatif"` | Mapping 5→3 pas implémenté |
-| L'UI affiche « API non branchée » | Compléter `app.py` dans `services/ui-streamlit/` |
-| `Connection refused` depuis l'UI | URL = `http://api-nlp:8000` (nom de service), pas `localhost` |
-| `ModuleNotFoundError` | Rebuild : `docker compose build --no-cache api-nlp` |
-| Service `unhealthy` après 2 min | `docker compose logs api-nlp` (réseau / mémoire / chargement modèle) |
+| `négatif` | moyenne(1★, 2★) |
+| `neutre` | moyenne(2★, 3★, 4★) |
+| `positif` | moyenne(4★, 5★) |
 
-Logs en temps réel : `docker compose logs -f api-nlp`. **Demande en direct
-mercredi 9h-13h** — Discord ouvert, on est ensemble. RDV vendredi sinon.
+La classe retenue est celle dont la moyenne est la plus élevée. Les étoiles 2★ et 4★ sont partagées entre deux groupes pour lisser les cas ambivalents — une frontière brutale produirait trop de faux neutres sur des reviews à polarité faible.
+
+### Variables d'environnement
+
+| Variable | Défaut | Usage |
+|---|---|---|
+| `MODEL_NAME_HF` | `cmarkea/distilcamembert-base-sentiment` | Modèle HuggingFace à charger |
+| `MAX_TEXT_LENGTH` | `2000` | Longueur max du texte accepté |
+
+---
+
+## Tests
+
+Les tests tournent **dans le conteneur** (le modèle doit être chargé) :
+
+```bash
+docker compose exec api-nlp pytest -v
+```
+
+| Fichier | Ce qui est testé |
+|---|---|
+| `tests/test_health.py` | `GET /health` → 200, `model_loaded: true` |
+| `tests/test_predict.py` | `POST /predict` → 200, `sentiment` dans les 3 classes valides |
+
+---
+
+## Analyse des reviews mal classées
+
+> Tâche async B — à compléter
+
+Trois cas extraits de `data/sample_reviews.csv` où le modèle se trompe, avec hypothèse typée.
+
+### Cas 1 — Ironie / sarcasme
+
+```
+Review    : "Vraiment super ! On nous a volé nos effets personnels dans la chambre
+             et la sécurité n'a pas réagi, génial je recommande !"
+Prédit    : positif (5★ : 90,4% — 4★ : 9,0%)
+Attendu   : négatif
+Hypothèse : ironie — les marqueurs de surface ("Vraiment super !", "génial",
+             "je recommande") sont tous positifs, ce qui trompe le modèle.
+             CamemBERT capte la polarité lexicale mais ne détecte pas le
+             sarcasme sans contexte pragmatique. La gravité du contenu
+             (vol, absence de réaction sécurité) est écrasée par les
+             exclamations enthousiastes.
+```
+
+### Cas 2 — Négation / litote
+
+```
+Review    : "Je ne dirais pas que c'était un mauvais hôtel."
+Prédit    : négatif (2★ : 38,3% — 1★ : 33,3%)
+Attendu   : neutre
+Hypothèse : négation — le modèle accroche sur le mot "mauvais" et
+             l'associe à une polarité négative sans traiter la négation
+             "ne...pas" qui l'annule. La phrase est en réalité une litote
+             signifiant "c'était correct". CamemBERT peine à résoudre la
+             portée de la négation longue distance sur un adjectif négatif.
+```
+
+### Cas 3 — Comparatif / attentes dépassées
+
+```
+Review    : "Moins bien que l'hôtel où on était l'année dernière, mais
+             vraiment mieux que ce à quoi je m'attendais pour ce prix."
+Prédit    : neutre (3★ : 47,8% — 4★ : 35,4%)
+Attendu   : positif
+Hypothèse : comparatif — la phrase contient deux comparaisons de sens
+             opposé. Le modèle les moyenne et atterrit sur neutre. Mais
+             la seconde partie ("vraiment mieux que ce à quoi je
+             m'attendais pour ce prix") porte le signal émotionnel fort :
+             attentes dépassées = satisfaction. CamemBERT ne résout pas
+             la hiérarchie sémantique entre les deux propositions et traite
+             "moins bien" et "vraiment mieux" comme des signaux de poids égal.
+```
+
+### Cas 4 — Mixte / signal bloquant noyé
+
+```
+Review    : "Personnel adorable et chambre impeccable, mais il faisait
+             beaucoup trop chaud sans la clim, je n'ai pas dormi de la nuit."
+Prédit    : neutre (3★ : 48,4% — 2★ : 36,2%)
+Attendu   : négatif
+Hypothèse : mixte — la review contient deux blocs de polarité opposée
+             séparés par "mais". Le modèle équilibre les deux et atterrit
+             sur neutre. Or "je n'ai pas dormi de la nuit" est un signal
+             bloquant : une nuit sans sommeil annule objectivement les
+             points positifs sur la chambre et le personnel. Le modèle
+             traite tous les tokens avec un poids uniforme et ne hiérarchise
+             pas le degré de gravité des critiques.
+```
+
+### Cas 5 — Ambivalence / sous-entrendu négatif
+
+```
+Review    : "Disons que ça fait le travail. Rien à signaler de particulier."
+Prédit    : positif (4★ : 58,8% — 5★ : 20,9%)
+Attendu   : neutre
+Hypothèse : ambivalence — la formulation est volontairement vague et peu
+             enthousiaste. "Ça fait le travail" et "rien à signaler" sont
+             des expressions de satisfaction minimale, proches du neutre
+             teinté de déception. Le modèle interprète l'absence de mots
+             négatifs explicites comme un signal positif et sur-classifie
+             en positif. Il ne capte pas le sous-entendu implicite : quand
+             un client ne trouve rien à dire, c'est rarement un compliment.
+```
+
+### Cas 6 — Hors-sujet / bruit contextuel
+
+```
+Review    : "J'ai passé un après-midi incroyable à la plage, il faisait bon
+             et j'ai adoré jouer dans les vagues. Hotel pas fou."
+Prédit    : positif (5★ : 43,6% — 4★ : 28,0%)
+Attendu   : négatif
+Hypothèse : hors-sujet — la majorité du texte décrit une expérience
+             extérieure à l'hôtel (la plage, la météo, les vagues), avec
+             un vocabulaire très positif ("incroyable", "adoré", "bon").
+             Le jugement réel sur l'hôtel — "Hotel pas fou" — est court,
+             en fin de phrase, et noyé dans le bruit contextuel positif.
+             Le modèle pondère tous les tokens sans distinguer ce qui
+             concerne l'établissement de ce qui est hors périmètre.
+```
+
+---
+
+## Roadmap
+
+| Priorité | Fonctionnalité | Statut |
+|---|---|---|
+| Critique | Mapping 5★ → 3 classes implémenté et justifié | Fait |
+| Critique | UI Streamlit branchée à l'API | Fait |
+| Critique | ≥ 3 tests pytest qui passent | Fait |
+| Critique | Analyse des reviews mal classées (≥ 3 cas) | En cours |
+| Important | Collection Postman complète (≥ 5 requêtes, cas limites) | À faire |
+| Bonus | Healthcheck custom avec retry | À faire |
+| Bonus | Endpoint `POST /predict/batch` | À faire |
+| Bonus | Justification CamemBERT vs LLM (½ page) | À faire |
+
+---
+
+## Licence
+
+Usage interne formation — non destiné à la distribution publique.
+
+---
+
+## Contact
+
+**Nawelle Polin** — [npolin@dev-id.fr](mailto:npolin@dev-id.fr)
+
+Formation Dev-ID · Brief M0-B2 · Juin 2026
